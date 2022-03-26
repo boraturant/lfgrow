@@ -1,0 +1,490 @@
+import * as React from 'react';
+import Divider from '@material-ui/core/Divider';
+import { AppContext } from '../../utils/appState';
+import Button from '@material-ui/core/Button';
+import {
+	FacebookLoginButton,
+	GoogleLoginButton,
+	createButton,
+} from 'react-social-login-buttons';
+import GoogleLogin from 'react-google-login';
+import FacebookLogin from 'react-facebook-login';
+import FacebookLoginCustom from 'react-facebook-login/dist/facebook-login-render-props';
+import axios from 'axios';
+import { http, http2 } from '../../utils/http';
+import { GlobalPostInstanceArray, Globals } from '../../utils/index2';
+import Avatar from '@material-ui/core/Avatar';
+import { store } from '../../utils/store_app2';
+import AppBar from '@material-ui/core/AppBar';
+import Toolbar from '@material-ui/core/Toolbar';
+import IconButton from '@material-ui/core/IconButton';
+
+import CloseIcon from '@material-ui/icons/Close';
+import CircularProgress from '@material-ui/core/CircularProgress';
+import Typography from '@material-ui/core/Typography';
+import withStyles, {
+	WithStyles,
+	StyleRulesCallback,
+} from '@material-ui/core/styles/withStyles';
+import { ethers } from 'ethers';
+import WalletConnectProvider from '@walletconnect/web3-provider';
+//import WalletConnect from '@walletconnect/client';
+//import QRCodeModal from '@walletconnect/qrcode-modal';
+import withRoot from '../../withRoot';
+
+import {
+	createMuiTheme,
+	makeStyles,
+	withTheme,
+	responsiveFontSizes,
+	ThemeProvider,
+} from '@material-ui/core/styles';
+import {
+	AssignmentReturnOutlined,
+	TransferWithinAStation,
+} from '@material-ui/icons';
+
+const styles: StyleRulesCallback<'root'> = (theme) => ({
+	root: {
+		backgroundColor: '#ffffff',
+		// display: 'flex',
+		// flexFlow: 'column',
+		// height: '95vh',
+		// width: '100%',
+		// overflow: 'hidden',
+	},
+	close: {
+		zIndex: 287,
+		position: 'absolute',
+		top: 20,
+		left: 5,
+		opacity: 0.8,
+	},
+	appBar: {
+		// top: '5vh',
+
+		marginTop: 20,
+		// left: 0,
+		//boxShadow: 'none',
+		//	alignItems: 'center',
+	},
+	grow: {
+		flexGrow: 1,
+		textAlign: 'center',
+	},
+
+	appBarIcon: {
+		width: '50px',
+		marginLeft: 10,
+		marginRight: 10,
+	},
+});
+
+interface State {}
+
+let provider_wallet;
+let signer_wallet;
+let provider;
+let walletConnect_connector;
+let walletWeb3Account;
+
+class SignIn extends React.Component<WithStyles<'root'>, State> {
+	constructor(props) {
+		super(props);
+		this.state = {
+			isProcessing: false,
+			loginMethod: '',
+			isError: false,
+			errorMsg: '',
+			walletWeb3Account: '',
+		};
+	}
+	componentDidMount() {
+		//Get Load Url
+		//let post =
+		//	GlobalPostInstanceArray[Globals.currentIndexOnDataArray].props.data;
+		//this.setState({ url: post.hasACButtonLink });
+		//this.setState({ url: 'http://migros.com' });
+	}
+	componentWillUnmount() {}
+
+	//CRYPTO WALLET ------------------------------------------------
+
+	handleWalletConnectClicked = async () => {
+		//Connect with WalletConnect Button is Clicked
+
+		//Delete
+		localStorage.removeItem('walletconnect');
+
+		const walletConnectProvider = new WalletConnectProvider({
+			infuraId: process.env.INFURA_ID,
+		});
+
+		// Close provider session??
+		await walletConnectProvider.disconnect();
+
+		//  Enable session (triggers QR Code modal)
+		await walletConnectProvider.enable();
+
+		//  Wrap with Web3Provider from ethers.js
+		const provider_wallet = new ethers.providers.Web3Provider(
+			walletConnectProvider
+		);
+
+		signer_wallet = provider_wallet.getSigner();
+		walletWeb3Account = await signer_wallet.getAddress();
+
+		//Request Nonce From Server - When received, sign message and login to server
+		let data = {
+			web3Account: walletWeb3Account,
+			requestNonce: true,
+		};
+		this.sendSignInRequestToServer('web3', data);
+	};
+
+	handleConnectWalletClicked = () => {
+		//alert('handleConnectWalletClicked');
+		//Check if etherium is in Window
+		if (typeof window.ethereum === 'undefined') {
+			alert(
+				'No Web3 compatible wallet detected. Please install Metamask extension on your browser'
+			);
+			return;
+		}
+
+		window.ethereum
+			.request({ method: 'eth_requestAccounts' })
+			.then(this.handleWeb3WalletAccountSelected)
+			.catch((err) => {
+				if (err.code === 4001) {
+					// EIP-1193 userRejectedRequest error
+					// If this happens, the user rejected the connection request.
+					//alert('Please connect to MetaMask.');
+				} else {
+					alert(err);
+				}
+			});
+	};
+
+	handleWeb3WalletAccountSelected = () => {
+		//alert('handleWeb3WalletAccountSelected');
+		let hasConnectedAccount =
+			window.ethereum.selectedAddress &&
+			window.ethereum.selectedAddress.length > 0;
+
+		if (hasConnectedAccount) {
+			walletWeb3Account = window.ethereum.selectedAddress;
+			//alert(walletWeb3Account);
+			this.setState({ walletWeb3Account: walletWeb3Account });
+
+			provider_wallet = new ethers.providers.Web3Provider(window.ethereum);
+			signer_wallet = provider_wallet.getSigner();
+
+			//Get Nonce From Server
+			let data = {
+				web3Account: walletWeb3Account,
+				requestNonce: true,
+			};
+			this.sendSignInRequestToServer('web3', data);
+		} else {
+			alert('No account found in wallet');
+		}
+	};
+	//END CRYPTO WALLET -----------------------------------------
+
+	sendSignInRequestToServer = (signInMethod, data) => {
+		this.setState({ isProcessing: true });
+
+		http
+			.post('api/client/auth', {
+				signInMethod: signInMethod,
+				data: data,
+			})
+			.then((res) => {
+				//	console.log('Campaign ID Received:' + res.data.codeID);
+				console.log(res);
+				if (res.data.nonce) {
+					//alert(res.data.nonce);
+					//Nonce received, Sign Nonce and Login
+					this.signAndLoginWithWeb3(res.data.nonce);
+				} else {
+					//	alert('Logged In');
+					store.token = res.data.token;
+					store.username = res.data.username;
+					this.context.handleLogin();
+					this.context.updateState('showSignIn', false);
+				}
+			})
+			.catch((err) => {
+				console.log(err);
+				this.context.showMsgbox({
+					message: '',
+					title: 'Login failed',
+				});
+				// console.log('AXIOS ERROR: ', JSON.stringify(err));
+				// this.context.showMsgbox({
+				// 	message: 'Something happened, we can not create a new campaign',
+				// 	title: 'Error Occured',
+				// });
+			})
+			.finally(() => {
+				this.setState({
+					isProcessing: false,
+				});
+			});
+	};
+	signAndLoginWithWeb3 = async (nonce) => {
+		//alert('Signing ' + nonce);
+		let signature = await signer_wallet.signMessage(nonce);
+		// console.log(signature);
+		//alert(signature);
+
+		let data = {
+			web3Account: walletWeb3Account,
+			requestNonce: false,
+			signature: signature,
+		};
+
+		this.sendSignInRequestToServer('web3', data);
+	};
+
+	responseGoogleSuccess = (resp) => {
+		console.log('responseGoogleSuccess');
+		// console.log(`GoogleID: ${resp.profileObj.googleId}`);
+		// console.log(`GoogleToken: ${resp.tokenObj.id_token}`);
+		// console.log(JSON.stringify(resp));
+
+		let data = {
+			googleID: resp.profileObj.googleId,
+			googleToken: resp.tokenObj.id_token,
+		};
+		this.sendSignInRequestToServer('google', data);
+	};
+	responseGoogleFail = (response) => {
+		console.log('Login Failed');
+		this.context.showMsgbox({
+			message: '',
+			title: 'Login failed',
+		});
+		console.log(response);
+		this.setState({
+			isProcessing: false,
+			isError: true,
+			errorMsg: 'Login Failed',
+		});
+	};
+
+	responseFacebookSuccess = (resp) => {
+		console.log('responseFacebookSuccess');
+		console.log(`Facebook: ${resp.userID}`);
+		console.log(`AccessToken: ${resp.accessToken}`);
+		console.log(JSON.stringify(resp));
+		let data = {
+			facebookID: resp.userID,
+			facebookAccessToken: resp.accessToken,
+			signedRequest: resp.signedRequest,
+			email: resp.email,
+			name: resp.name,
+			pictureUrl: resp.picture.data.url,
+		};
+		this.sendSignInRequestToServer('facebook', data);
+	};
+
+	responseFacebookFail = (response) => {
+		console.log('Login Failed');
+		this.context.showMsgbox({
+			message: '',
+			title: 'Login failed',
+		});
+		console.log(response);
+		this.setState({
+			isProcessing: false,
+			isError: true,
+			errorMsg: 'Login Failed',
+		});
+	};
+
+	facebookButtonClicked = () => {
+		console.log('facebookButtonClicked');
+		this.setState({ isProcessing: true, loginMethod: 'facebook' });
+	};
+	googleButtonClicked = () => {
+		console.log('googleButtonClicked');
+		this.setState({ isProcessing: true, loginMethod: 'google' });
+	};
+
+	render() {
+		const { classes } = this.props;
+
+		return (
+			<div className={classes.root}>
+				<AppBar
+					elevation={0}
+					color="primary"
+					position="relative"
+					className={classes.appBar}
+				>
+					<Toolbar disableGutters>
+						<IconButton
+							color="inherit"
+							className={classes.appBarIcon}
+							onClick={() => this.context.updateState('showSignIn', false)}
+						>
+							<CloseIcon />
+						</IconButton>
+						<Typography variant="h6" color="inherit" className={classes.grow}>
+							Sign In
+						</Typography>
+						<div className={classes.appBarIcon}>
+							{this.state.isProcessing && (
+								<CircularProgress color="secondary" size={25} />
+							)}
+						</div>
+					</Toolbar>
+				</AppBar>
+				{/* <Toolbar /> */}
+				<Divider />
+				<div style={{ padding: 20 }}></div>
+
+				<div
+					style={{
+						// backgroundColor: '#fffff',
+						// display: 'grid',
+						// alignItems: 'stretch',
+						// justifyContent: 'center',
+						// alignContent: 'center',
+						// height: '50vh',
+						textAlign: 'center',
+						padding: 20,
+					}}
+				>
+					<Button
+						variant="contained"
+						color="secondary"
+						onClick={this.handleConnectWalletClicked}
+					>
+						Connect with Metamask
+					</Button>
+				</div>
+				<br />
+
+				<div
+					style={{
+						// backgroundColor: '#fffff',
+						// display: 'grid',
+						// alignItems: 'stretch',
+						// justifyContent: 'center',
+						// alignContent: 'center',
+						// height: '50vh',
+						textAlign: 'center',
+						padding: 20,
+					}}
+				>
+					<Button
+						variant="contained"
+						color="secondary"
+						onClick={this.handleWalletConnectClicked}
+					>
+						Connect with WalletConnect
+					</Button>
+				</div>
+				<br />
+				<div
+					style={{
+						// backgroundColor: '#fffff',
+						// display: 'grid',
+						// alignItems: 'stretch',
+						// justifyContent: 'center',
+						// alignContent: 'center',
+						// height: '50vh',
+						textAlign: 'center',
+						padding: 20,
+					}}
+				>
+					<GoogleLogin
+						disabled={this.state.isProcessing}
+						clientId={process.env.GOOGLE_CLIENT_ID}
+						buttonText="Continue with Google"
+						onSuccess={this.responseGoogleSuccess}
+						onFailure={this.responseGoogleFail}
+						cookiePolicy={'single_host_origin'}
+						render={(renderProps) => (
+							<GoogleLoginButton
+								onClick={() => {
+									this.googleButtonClicked();
+									renderProps.onClick();
+								}}
+								align="center"
+								preventActiveStyles
+								style={{ maxWidth: 500, margin: 'auto' }}
+								//disabled={renderProps.disabled}
+							>
+								Continue with Google
+							</GoogleLoginButton>
+						)}
+					/>
+					<br />
+					{/* <FacebookLoginCustom
+						disabled={this.state.isProcessing}
+						appId={process.env.FB_CLIENT_ID}
+						autoLoad={false}
+						textButton="Continue with Facebook"
+						fields="name,email,picture"
+						redirectUri={window.location.href}
+						disableMobileRedirect={true}
+						// onClick={this.facebookButtonClicked}
+						onFailure={this.responseFacebookFail}
+						callback={this.responseFacebookSuccess}
+						render={(renderProps) => (
+							<FacebookLoginButton
+								onClick={renderProps.onClick}
+								align="center"
+								preventActiveStyles
+								//size="90%"
+								iconColor="#4267B2"
+								style={{
+									background: '#ffffff',
+									color: '#000000',
+									maxWidth: 500,
+									margin: 'auto',
+								}}
+
+								// disabled={renderProps.disabled}
+							>
+								Continue with Facebook
+							</FacebookLoginButton>
+						)}
+					/> */}
+				</div>
+
+				<div
+					style={{
+						maxWidth: 500,
+						paddingLeft: 40,
+						paddingRight: 40,
+						paddingTop: 80,
+						margin: 'auto',
+						textAlign: 'center',
+					}}
+				>
+					<Typography
+						variant="caption"
+						style={{ color: 'lightGray', textAlign: 'center' }}
+					>
+						By continuing, you agree to Terms of Use and confirm that you have
+						read Privacy Policy.
+					</Typography>
+				</div>
+				{/* <iframe
+					className={classes.iframe}
+					src={this.state.url}
+					frameBorder="0"
+					onLoad={this.iFrameOnLoad}
+					onError={this.iFrameOnError}
+				></iframe> */}
+			</div>
+		);
+	}
+}
+SignIn.contextType = AppContext;
+export default withStyles(styles)(SignIn);
